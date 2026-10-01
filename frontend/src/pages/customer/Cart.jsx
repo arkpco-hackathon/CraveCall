@@ -27,6 +27,10 @@ export default function Cart() {
 
   if (loading) return <LoadingSpinner size="lg" className="min-h-[60vh]" />;
 
+  const subtotal = cart ? parseFloat(cart.subtotal) : 0;
+  const deliveryFee = subtotal >= 500 ? 0 : subtotal >= 300 ? 30 : 50;
+  const total = subtotal + deliveryFee;
+
   return (
     <div className="max-w-3xl mx-auto px-4 py-10">
       <h1 className="text-2xl font-bold text-gray-900 mb-6">Your Cart</h1>
@@ -74,15 +78,20 @@ export default function Cart() {
               <div className="space-y-2 text-sm mb-4">
                 <div className="flex justify-between text-gray-600">
                   <span>Subtotal</span>
-                  <span>₹{parseFloat(cart.subtotal).toFixed(2)}</span>
+                  <span>₹{subtotal.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between text-gray-600">
                   <span>Delivery fee</span>
-                  <span>{parseFloat(cart.delivery_fee) === 0 ? 'Free' : `₹${parseFloat(cart.delivery_fee).toFixed(2)}`}</span>
+                  <span>{deliveryFee === 0 ? <strong className="text-green-600">Free</strong> : `₹${deliveryFee.toFixed(2)}`}</span>
                 </div>
+                {subtotal < 500 && (
+                  <p className="text-[11px] text-gray-400 italic">
+                    Add ₹{(500 - subtotal).toFixed(0)} more for FREE delivery
+                  </p>
+                )}
                 <div className="border-t border-gray-100 pt-2 flex justify-between font-bold text-gray-900 text-base">
                   <span>Total</span>
-                  <span>₹{parseFloat(cart.total).toFixed(2)}</span>
+                  <span>₹{total.toFixed(2)}</span>
                 </div>
               </div>
               <button onClick={() => navigate('/checkout')} className="btn-primary w-full py-3 text-base">

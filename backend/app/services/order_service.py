@@ -8,6 +8,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models import User, Restaurant, MenuItem, Order, OrderItem, CartItem
+from app.services.pricing_service import calculate_order_totals
 
 
 VALID_STATUSES = ["PLACED", "CONFIRMED", "PREPARING", "OUT_FOR_DELIVERY", "DELIVERED", "CANCELLED"]
@@ -33,7 +34,9 @@ def _build_order_out(order: Order) -> dict:
         "contact_phone": order.contact_phone,
         "subtotal": order.subtotal,
         "delivery_fee": order.delivery_fee,
+        "discount": getattr(order, "discount", Decimal("0.00")),
         "total": order.total,
+        "coupon_code": getattr(order, "coupon_code", None),
         "payment_method": order.payment_method,
         "payment_status": order.payment_status,
         "source": order.source,
@@ -61,6 +64,7 @@ def create_order_from_cart(
     contact_phone: str | None,
     payment_method: str,
     notes: str | None = None,
+    coupon_code: str | None = None,
 ) -> Order:
     """Create an order from the customer's current cart (web ordering path)."""
     cart_items = (
@@ -88,6 +92,7 @@ def create_order_from_cart(
         payment_method=payment_method,
         source="web",
         notes=notes,
+        coupon_code=coupon_code,
     )
 
     # Clear cart after order
@@ -103,6 +108,7 @@ def create_order_from_voice(
     restaurant_name: str,
     items_data: list[dict],  # [{name, quantity}]
     delivery_address: str,
+    coupon_code: str | None = None,
 ) -> Order:
     """Create an order from a VAPI voice call (voice ordering path)."""
     # Resolve customer by phone
@@ -149,6 +155,7 @@ def create_order_from_voice(
         contact_phone=customer.phone,
         payment_method="cash",  # voice orders default to cash
         source="voice",
+        coupon_code=coupon_code,
     )
     db.commit()
     db.refresh(order)
@@ -165,10 +172,11 @@ def _create_order(
     payment_method: str,
     source: str,
     notes: str | None = None,
+    coupon_code: str | None = None,
 ) -> Order:
     """
     Core order creation logic — shared between web and voice paths.
-    Validates all items, fetches prices from DB, calculates totals.
+    Validates all items, fetches prices from DB, calculates subtotal, delivery fee, coupon discounts and totals.
     """
     # Validate restaurant
     restaurant = db.query(Restaurant).filter(Restaurant.id == restaurant_id, Restaurant.is_active == True).first()
@@ -178,7 +186,7 @@ def _create_order(
     if not items:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No items in order")
 
-    subtotal = Decimal("0.00")
+    raw_subtotal = Decimal("0.00")
     order_items_data = []
 
     for item_req in items:
@@ -198,7 +206,7 @@ def _create_order(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"'{menu_item.name}' is currently unavailable")
 
         item_total = menu_item.price * quantity
-        subtotal += item_total
+        raw_subtotal += item_total
         order_items_data.append({
             "menu_item_id": menu_item.id,
             "name": menu_item.name,        # snapshot
@@ -206,8 +214,8 @@ def _create_order(
             "quantity": quantity,
         })
 
-    delivery_fee = restaurant.delivery_fee
-    total = subtotal + delivery_fee
+    # Centralized pricing & coupon calculation
+    pricing = calculate_order_totals(db=db, subtotal=raw_subtotal, coupon_code=coupon_code)
 
     order = Order(
         customer_id=customer_id,
@@ -215,9 +223,11 @@ def _create_order(
         status="PLACED",
         delivery_address=delivery_address,
         contact_phone=contact_phone,
-        subtotal=subtotal,
-        delivery_fee=delivery_fee,
-        total=total,
+        subtotal=pricing["subtotal"],
+        delivery_fee=pricing["delivery_fee"],
+        discount=pricing["discount"],
+        total=pricing["total"],
+        coupon_code=pricing["coupon_code"],
         payment_method=payment_method,
         payment_status="PENDING",
         source=source,

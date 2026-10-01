@@ -1,6 +1,9 @@
+from decimal import Decimal
+from typing import Optional
+from pydantic import BaseModel
+
 from fastapi import APIRouter, Depends, HTTPException, Header, status
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from app.database import get_db
 from app.models import Order, User
@@ -10,14 +13,20 @@ from app.services.order_service import (
     create_order_from_cart, create_order_from_voice,
     update_order_status, _build_order_out,
 )
+from app.services.pricing_service import calculate_order_totals
 from app.config import settings
 
-router = APIRouter(prefix="/api/orders", tags=["orders"])
+router = APIRouter(tags=["orders"])
+
+
+class CouponValidateRequest(BaseModel):
+    code: str
+    subtotal: Decimal
 
 
 # ── Customer: place order from cart ──────────────────────────────────────────
 
-@router.post("", status_code=201)
+@router.post("/api/orders", status_code=201)
 def place_order(
     payload: OrderCreate,
     db: Session = Depends(get_db),
@@ -30,13 +39,14 @@ def place_order(
         contact_phone=payload.contact_phone,
         payment_method=payload.payment_method,
         notes=payload.notes,
+        coupon_code=payload.coupon_code,
     )
     return _build_order_out(order)
 
 
 # ── Customer: order history ───────────────────────────────────────────────────
 
-@router.get("")
+@router.get("/api/orders")
 def get_my_orders(
     db: Session = Depends(get_db),
     current_user: User = Depends(require_customer),
@@ -50,9 +60,27 @@ def get_my_orders(
     return [_build_order_out(o) for o in orders]
 
 
+# ── Coupon Validation Preview ────────────────────────────────────────────────
+
+@router.post("/api/coupons/validate")
+def validate_coupon(
+    payload: CouponValidateRequest,
+    db: Session = Depends(get_db),
+):
+    pricing = calculate_order_totals(db=db, subtotal=payload.subtotal, coupon_code=payload.code)
+    return {
+        "valid": True,
+        "code": pricing["coupon_code"],
+        "subtotal": float(pricing["subtotal"]),
+        "delivery_fee": float(pricing["delivery_fee"]),
+        "discount": float(pricing["discount"]),
+        "total": float(pricing["total"]),
+    }
+
+
 # ── Order detail (customer or restaurant) ─────────────────────────────────────
 
-@router.get("/{order_id}")
+@router.get("/api/orders/{order_id}")
 def get_order(
     order_id: int,
     db: Session = Depends(get_db),
@@ -73,7 +101,7 @@ def get_order(
 
 # ── Restaurant: update status ─────────────────────────────────────────────────
 
-@router.patch("/{order_id}/status")
+@router.patch("/api/orders/{order_id}/status")
 def update_status(
     order_id: int,
     payload: OrderStatusUpdate,
@@ -86,7 +114,7 @@ def update_status(
 
 # ── Voice order (n8n → FastAPI) ───────────────────────────────────────────────
 
-@router.post("/voice", status_code=201)
+@router.post("/api/orders/voice", status_code=201)
 def voice_order(
     payload: VoiceOrderCreate,
     x_voice_api_key: Optional[str] = Header(None),
@@ -107,12 +135,17 @@ def voice_order(
         restaurant_name=payload.restaurant,
         items_data=items_data,
         delivery_address=payload.delivery_address,
+        coupon_code=payload.coupon_code,
     )
 
     return {
         "success": True,
         "order_id": order.id,
+        "subtotal": float(order.subtotal),
+        "delivery_fee": float(order.delivery_fee),
+        "discount": float(getattr(order, "discount", 0.0)),
         "total": float(order.total),
         "status": order.status,
         "source": order.source,
+        "message": "Order placed successfully",
     }

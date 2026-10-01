@@ -57,13 +57,16 @@ export const api = {
   removeCartItem: (id) => request(`/api/cart/items/${id}`, { method: 'DELETE' }),
   clearCart: () => request('/api/cart', { method: 'DELETE' }),
 
+  // Coupons
+  validateCoupon: (code, subtotal) => request('/api/coupons/validate', { method: 'POST', body: JSON.stringify({ code, subtotal }) }),
+
   // Orders
   placeOrder: (data) => request('/api/orders', { method: 'POST', body: JSON.stringify(data) }),
   getOrders: () => request('/api/orders'),
   getOrder: (id) => request(`/api/orders/${id}`),
 
   // Restaurant dashboard
-  getRestaurantOrders: () => request('/api/restaurant/orders'),
+  getRestaurantOrders: (status) => request(`/api/restaurant/orders${status ? `?status=${status}` : ''}`),
   updateOrderStatus: (id, status) => request(`/api/orders/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   getAnalytics: () => request('/api/restaurant/analytics'),
 

@@ -21,6 +21,7 @@ class OrderCreate(BaseModel):
     contact_phone: Optional[str] = None
     payment_method: str  # 'demo_upi' | 'demo_card' | 'cash'
     notes: Optional[str] = None
+    coupon_code: Optional[str] = None
 
 
 class OrderOut(BaseModel):
@@ -33,7 +34,9 @@ class OrderOut(BaseModel):
     contact_phone: Optional[str] = None
     subtotal: Decimal
     delivery_fee: Decimal
+    discount: Decimal = Decimal("0.00")
     total: Decimal
+    coupon_code: Optional[str] = None
     payment_method: Optional[str] = None
     payment_status: str
     source: str
@@ -56,6 +59,7 @@ class VoiceOrderCreate(BaseModel):
     restaurant: str
     items: list[VoiceOrderItem]
     delivery_address: str
+    coupon_code: Optional[str] = None
     confirmed: bool = True
     source: str = "voice"
 

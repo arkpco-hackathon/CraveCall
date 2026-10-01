@@ -1,20 +1,47 @@
 """
 Seed script — called once at application startup when DB is empty.
-Creates demo accounts, restaurants, menu items, and historical orders.
+Creates demo accounts, restaurants, menu items, coupons, and historical orders.
 """
 from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.orm import Session
 
-from app.models import User, Restaurant, MenuItem, Order, OrderItem
+from app.models import User, Restaurant, MenuItem, Order, OrderItem, Coupon
 from app.auth.jwt import hash_password
+from app.services.pricing_service import calculate_order_totals
 
 
 DEMO_PASSWORD = "demo1234"
 
 
+def seed_coupons_if_empty(db: Session) -> None:
+    """Ensure demo coupons exist even if users were already seeded."""
+    if db.query(Coupon).count() == 0:
+        c1 = Coupon(
+            code="WELCOME50",
+            discount_type="PERCENTAGE",
+            discount_value=Decimal("50.00"),
+            min_order_value=Decimal("300.00"),
+            max_discount=Decimal("50.00"),
+            is_active=True,
+        )
+        c2 = Coupon(
+            code="SAVE30",
+            discount_type="FIXED_AMOUNT",
+            discount_value=Decimal("30.00"),
+            min_order_value=Decimal("250.00"),
+            max_discount=None,
+            is_active=True,
+        )
+        db.add_all([c1, c2])
+        db.commit()
+        print("🏷️  Demo coupons seeded (WELCOME50, SAVE30)")
+
+
 def seed_if_empty(db: Session) -> None:
+    seed_coupons_if_empty(db)
+
     if db.query(User).count() > 0:
         return  # Already seeded
 
@@ -149,19 +176,20 @@ def seed_if_empty(db: Session) -> None:
     # ── Historical orders ──────────────────────────────────────────────────────
     now = datetime.now(timezone.utc)
 
-    def make_order(customer, restaurant, items_data, status, source="web", days_ago=1, payment_method="demo_card"):
+    def make_order(customer, restaurant, items_data, status, source="web", days_ago=1, payment_method="demo_card", coupon_code=None):
         subtotal = sum(Decimal(str(p)) * q for _, p, q in items_data)
-        delivery_fee = restaurant.delivery_fee
-        total = subtotal + delivery_fee
+        pricing = calculate_order_totals(db=db, subtotal=subtotal, coupon_code=coupon_code)
         order = Order(
             customer_id=customer.id,
             restaurant_id=restaurant.id,
             status=status,
             delivery_address=customer.delivery_address or "123 Main Street",
             contact_phone=customer.phone,
-            subtotal=subtotal,
-            delivery_fee=delivery_fee,
-            total=total,
+            subtotal=pricing["subtotal"],
+            delivery_fee=pricing["delivery_fee"],
+            discount=pricing["discount"],
+            total=pricing["total"],
+            coupon_code=pricing["coupon_code"],
             payment_method=payment_method,
             payment_status="SUCCESS" if status != "CANCELLED" else "FAILED",
             source=source,
@@ -171,13 +199,13 @@ def seed_if_empty(db: Session) -> None:
         return order, items_data
 
     historical = [
-        make_order(customer1, burger_bliss, [("Classic Chicken Burger", 249, 2), ("Loaded Fries", 179, 1)], "DELIVERED", days_ago=7),
-        make_order(customer1, pizza_palace, [("Margherita Pizza", 299, 1), ("Garlic Bread", 129, 1), ("Tiramisu", 179, 1)], "DELIVERED", days_ago=5),
+        make_order(customer1, burger_bliss, [("Classic Chicken Burger", 249, 2), ("Loaded Fries", 179, 1)], "DELIVERED", days_ago=7, coupon_code="WELCOME50"),
+        make_order(customer1, pizza_palace, [("Margherita Pizza", 299, 1), ("Garlic Bread", 129, 1), ("Tiramisu", 179, 1)], "DELIVERED", days_ago=5, coupon_code="SAVE30"),
         make_order(customer1, spice_gardens, [("Butter Chicken", 320, 1), ("Garlic Naan", 60, 3)], "DELIVERED", days_ago=3),
         make_order(customer1, sushi_sakura, [("California Roll (8 pcs)", 380, 1), ("Edamame", 120, 1)], "DELIVERED", days_ago=2),
         make_order(customer1, taco_town, [("Chicken Tacos (3 pcs)", 249, 2), ("Nachos Grande", 229, 1)], "DELIVERED", days_ago=1),
         # Active orders (visible in restaurant dashboard)
-        make_order(customer2, burger_bliss, [("BBQ Bacon Burger", 349, 1), ("Chocolate Shake", 199, 1)], "PLACED", days_ago=0),
+        make_order(customer2, burger_bliss, [("BBQ Bacon Burger", 349, 1), ("Chocolate Shake", 199, 1)], "PLACED", days_ago=0, coupon_code="WELCOME50"),
         make_order(customer2, pizza_palace, [("Pepperoni Pizza", 399, 1), ("Caesar Salad", 199, 1)], "CONFIRMED", days_ago=0),
     ]
 

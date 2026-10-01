@@ -20,6 +20,12 @@ export default function Checkout() {
   const [form, setForm] = useState({ delivery_address: '', contact_phone: '', payment_method: 'demo_upi', notes: '' });
   const [error, setError] = useState('');
 
+  // Coupon state
+  const [couponCode, setCouponCode] = useState('');
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [appliedCoupon, setAppliedCoupon] = useState(null); // { code, discount, delivery_fee, total }
+  const [couponError, setCouponError] = useState('');
+
   useEffect(() => {
     api.getCart().then(c => {
       setCart(c);
@@ -33,6 +39,37 @@ export default function Checkout() {
 
   const set = (field) => (e) => setForm({ ...form, [field]: e.target.value });
 
+  const subtotal = cart ? parseFloat(cart.subtotal) : 0;
+
+  // Delivery fee rules: >=500 free, >=300 30, <300 50
+  const deliveryFee = appliedCoupon ? appliedCoupon.delivery_fee : (subtotal >= 500 ? 0 : subtotal >= 300 ? 30 : 50);
+  const discount = appliedCoupon ? appliedCoupon.discount : 0;
+  const grandTotal = appliedCoupon ? appliedCoupon.total : (subtotal + deliveryFee - discount);
+
+  const handleApplyCoupon = async (e) => {
+    if (e) e.preventDefault();
+    if (!couponCode.trim()) return;
+    setCouponError('');
+    setCouponLoading(true);
+
+    try {
+      const result = await api.validateCoupon(couponCode, subtotal);
+      setAppliedCoupon(result);
+      setCouponError('');
+    } catch (err) {
+      setAppliedCoupon(null);
+      setCouponError(err.message);
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  const handleRemoveCoupon = () => {
+    setAppliedCoupon(null);
+    setCouponCode('');
+    setCouponError('');
+  };
+
   const handlePlaceOrder = async (e) => {
     e.preventDefault();
     if (!form.delivery_address.trim()) { setError('Delivery address is required'); return; }
@@ -40,8 +77,13 @@ export default function Checkout() {
     setPlacing(true);
 
     try {
+      const orderPayload = {
+        ...form,
+        coupon_code: appliedCoupon ? appliedCoupon.code : (couponCode.trim() || null),
+      };
+
       // 1. Place order
-      const order = await api.placeOrder(form);
+      const order = await api.placeOrder(orderPayload);
 
       // 2. If UPI or Card — simulate payment
       if (form.payment_method !== 'cash') {
@@ -106,6 +148,63 @@ export default function Checkout() {
             </div>
           </div>
 
+          {/* Coupon input */}
+          <div className="card p-6">
+            <h2 className="font-bold text-gray-900 mb-3">Coupons & Offers</h2>
+            {appliedCoupon ? (
+              <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-green-600 font-bold text-sm">🎉 {appliedCoupon.code} Applied</span>
+                  </div>
+                  <p className="text-xs text-green-700 mt-0.5">You saved ₹{appliedCoupon.discount.toFixed(2)} on this order!</p>
+                </div>
+                <button type="button" onClick={handleRemoveCoupon} className="text-xs font-semibold text-red-600 hover:underline">
+                  Remove
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={couponCode}
+                    onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                    placeholder="Enter coupon code (e.g. WELCOME50)"
+                    className="input-field uppercase flex-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleApplyCoupon}
+                    disabled={couponLoading || !couponCode.trim()}
+                    className="btn-secondary px-5 text-sm font-semibold"
+                  >
+                    {couponLoading ? 'Checking…' : 'Apply'}
+                  </button>
+                </div>
+                {couponError && <p className="text-xs text-red-600 mt-2">{couponError}</p>}
+
+                {/* Hints */}
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => { setCouponCode('WELCOME50'); }}
+                    className="bg-orange-50 border border-orange-200 text-orange-700 px-2.5 py-1 rounded-md hover:bg-orange-100 transition-colors"
+                  >
+                    🎟️ <strong>WELCOME50</strong> (50% off min ₹300)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setCouponCode('SAVE30'); }}
+                    className="bg-purple-50 border border-purple-200 text-purple-700 px-2.5 py-1 rounded-md hover:bg-purple-100 transition-colors"
+                  >
+                    🏷️ <strong>SAVE30</strong> (₹30 off min ₹250)
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* Payment method */}
           <div className="card p-6">
             <h2 className="font-bold text-gray-900 mb-1">Payment Method</h2>
@@ -128,7 +227,7 @@ export default function Checkout() {
           </div>
 
           <button type="submit" disabled={placing} className="btn-primary w-full py-4 text-base">
-            {placing ? 'Placing order…' : `Place Order — ₹${parseFloat(cart.total).toFixed(2)}`}
+            {placing ? 'Placing order…' : `Place Order — ₹${grandTotal.toFixed(2)}`}
           </button>
         </form>
 
@@ -145,16 +244,27 @@ export default function Checkout() {
                 </div>
               ))}
             </div>
-            <div className="border-t border-gray-100 pt-3 space-y-1 text-sm">
+            <div className="border-t border-gray-100 pt-3 space-y-1.5 text-sm">
               <div className="flex justify-between text-gray-600">
-                <span>Subtotal</span><span>₹{parseFloat(cart.subtotal).toFixed(2)}</span>
+                <span>Subtotal</span><span>₹{subtotal.toFixed(2)}</span>
               </div>
               <div className="flex justify-between text-gray-600">
-                <span>Delivery</span>
-                <span>{parseFloat(cart.delivery_fee) === 0 ? 'Free' : `₹${parseFloat(cart.delivery_fee).toFixed(2)}`}</span>
+                <span>Delivery Fee</span>
+                <span>{deliveryFee === 0 ? <strong className="text-green-600">FREE</strong> : `₹${deliveryFee.toFixed(2)}`}</span>
               </div>
-              <div className="flex justify-between font-bold text-gray-900 text-base pt-1 border-t border-gray-100">
-                <span>Total</span><span>₹{parseFloat(cart.total).toFixed(2)}</span>
+              {subtotal < 500 && (
+                <p className="text-[11px] text-gray-400 italic">
+                  Add ₹{(500 - subtotal).toFixed(0)} more for FREE delivery
+                </p>
+              )}
+              {discount > 0 && (
+                <div className="flex justify-between text-green-600 font-medium">
+                  <span>Discount ({appliedCoupon?.code})</span>
+                  <span>-₹{discount.toFixed(2)}</span>
+                </div>
+              )}
+              <div className="flex justify-between font-bold text-gray-900 text-base pt-2 border-t border-gray-100">
+                <span>Total</span><span>₹{grandTotal.toFixed(2)}</span>
               </div>
             </div>
           </div>

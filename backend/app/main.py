@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.database import engine, SessionLocal
 from app.models import Base  # noqa: F401 — import all models so create_all sees them
@@ -33,6 +34,15 @@ def startup():
     Base.metadata.create_all(bind=engine)
     db = SessionLocal()
     try:
+        # Ensure schema compatibility for existing PostgreSQL instances
+        try:
+            db.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount NUMERIC(8, 2) NOT NULL DEFAULT 0;"))
+            db.execute(text("ALTER TABLE orders ADD COLUMN IF NOT EXISTS coupon_code VARCHAR(50);"))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            print(f"Migration check notice: {e}")
+
         seed_if_empty(db)
     finally:
         db.close()
